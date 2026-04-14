@@ -60,6 +60,15 @@ Find episodes by keyword:
 selfmod search "disk"
 ```
 
+### Show
+
+Display episode details with frame timeline:
+
+```
+selfmod show check-disk-ppr31
+selfmod show 1
+```
+
 ### Replay
 
 Re-execute a recorded task via interactive Claude Code session:
@@ -70,6 +79,18 @@ selfmod replay 1                                         # by ID
 selfmod replay check-disk-ppr31 "use server ppr32"       # with extra instructions
 selfmod replay check-disk-ppr31 --tmux-pane main:work.0  # execute in a tmux pane
 selfmod replay check-disk-ppr31 --dry-run                # print prompt only
+selfmod replay "check disk space"                        # no match — searches episodes DB
+```
+
+If the argument doesn't match any episode ID or name, Claude Code searches the episodes database for relevant episodes before executing the task.
+
+### Delete
+
+Delete an episode (frames are kept but unlinked):
+
+```
+selfmod delete check-disk-ppr31
+selfmod delete 1
 ```
 
 ### Rename

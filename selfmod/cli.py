@@ -6,6 +6,8 @@ import time
 import click
 
 from selfmod.db import (
+    DEFAULT_DB_PATH,
+    delete_episode,
     get_db,
     get_episode_frames,
     get_stats,
@@ -76,22 +78,32 @@ def search(ctx, query):
 @click.option("--tmux-pane", default=None, help="Tmux pane target to control via tmux send-keys")
 @click.pass_context
 def replay(ctx, episode, instructions, dry_run, tmux_pane):
-    """Replay an episode using Claude Code. EPISODE can be an ID or name."""
+    """Replay an episode using Claude Code. EPISODE can be an ID, name, or a task description."""
     conn = get_db(ctx.obj["db_path"])
-    episode = resolve_episode(conn, episode)
-    if episode is None:
-        click.echo("Episode not found.", err=True)
-        sys.exit(1)
+    db_path = ctx.obj["db_path"] or DEFAULT_DB_PATH
+    ep = resolve_episode(conn, episode)
 
-    prompt = (
-        f"I previously performed the following task in my terminal. "
-        f"Please perform this same task now.\n\n"
-        f"## Task: {episode['title']}\n\n"
-        f"{episode['summary']}\n"
-    )
-
-    if instructions:
-        prompt += f"\n## Additional instructions\n\n{instructions}\n"
+    if ep is not None:
+        prompt = (
+            f"I previously performed the following task in my terminal. "
+            f"Please perform this same task now.\n\n"
+            f"## Task: {ep['title']}\n\n"
+            f"{ep['summary']}\n"
+        )
+        if instructions:
+            prompt += f"\n## Additional instructions\n\n{instructions}\n"
+    else:
+        prompt = (
+            f"I want to perform the following task: {episode}\n\n"
+            f"I have a SQLite database of previously recorded terminal episodes at: {db_path}\n"
+            f"The `episodes` table has columns: id, name, title, summary, start_time, end_time.\n\n"
+            f"First, search the database for episodes relevant to this task "
+            f"(use SQL queries with LIKE on title and summary columns). "
+            f"If you find relevant episodes, use their summaries as guidance for executing the task. "
+            f"If no relevant episodes are found, proceed with the task using your best judgment.\n"
+        )
+        if instructions:
+            prompt += f"\n## Additional instructions\n\n{instructions}\n"
 
     if tmux_pane is not None:
         prompt += (
@@ -106,6 +118,46 @@ def replay(ctx, episode, instructions, dry_run, tmux_pane):
         return
 
     subprocess.run(["claude"], input=prompt, text=True)
+
+
+@cli.command()
+@click.argument("episode")
+@click.pass_context
+def show(ctx, episode):
+    """Show episode details. EPISODE can be an ID or name."""
+    conn = get_db(ctx.obj["db_path"])
+    ep = resolve_episode(conn, episode)
+    if ep is None:
+        click.echo("Episode not found.", err=True)
+        sys.exit(1)
+    frames = get_episode_frames(conn, ep["id"])
+    name_part = f" ({ep['name']})" if ep["name"] else ""
+    click.echo(f"[Episode {ep['id']}]{name_part} {ep['title']}")
+    click.echo(f"Time: {_fmt_time(ep['start_time'])} - {_fmt_time(ep['end_time'])}")
+    click.echo(f"Frames: {len(frames)}")
+    click.echo()
+    click.echo(ep["summary"])
+    if frames:
+        click.echo()
+        for f in frames:
+            ts = _fmt_time(f["timestamp"])
+            summary = f["summary"] or "(no summary)"
+            click.echo(f"  [{f['id']}] {ts} [{f['frame_type']}] {summary}")
+
+
+@cli.command()
+@click.argument("episode")
+@click.pass_context
+def delete(ctx, episode):
+    """Delete an episode. EPISODE can be an ID or name. Frames are kept but unlinked."""
+    conn = get_db(ctx.obj["db_path"])
+    ep = resolve_episode(conn, episode)
+    if ep is None:
+        click.echo("Episode not found.", err=True)
+        sys.exit(1)
+    name = ep["name"] or ep["title"]
+    delete_episode(conn, ep["id"])
+    click.echo(f"Deleted episode {ep['id']} ({name})")
 
 
 @cli.command()
