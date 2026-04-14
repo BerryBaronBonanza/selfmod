@@ -7,9 +7,10 @@ import click
 
 from selfmod.db import (
     get_db,
-    get_episode,
     get_episode_frames,
     get_stats,
+    rename_episode,
+    resolve_episode,
     search_episodes,
 )
 from selfmod.processor import process_frames
@@ -60,7 +61,8 @@ def search(ctx, query):
         return
     for ep in episodes:
         frames = get_episode_frames(conn, ep["id"])
-        click.echo(f"[Episode {ep['id']}] {ep['title']}")
+        name_part = f" ({ep['name']})" if ep["name"] else ""
+        click.echo(f"[Episode {ep['id']}]{name_part} {ep['title']}")
         click.echo(f"  {ep['summary']}")
         click.echo(f"  Time: {_fmt_time(ep['start_time'])} - {_fmt_time(ep['end_time'])}")
         click.echo(f"  Frames: {len(frames)}")
@@ -68,16 +70,17 @@ def search(ctx, query):
 
 
 @cli.command()
-@click.argument("episode_id", type=int)
+@click.argument("episode")
+@click.argument("instructions", required=False, default=None)
 @click.option("--dry-run", is_flag=True, help="Print the prompt instead of launching Claude")
-@click.option("--tmux-pane", default=None, help="Tmux pane index in current window to control via tmux send-keys")
+@click.option("--tmux-pane", default=None, help="Tmux pane target to control via tmux send-keys")
 @click.pass_context
-def replay(ctx, episode_id, dry_run, tmux_pane):
-    """Replay an episode using Claude Code."""
+def replay(ctx, episode, instructions, dry_run, tmux_pane):
+    """Replay an episode using Claude Code. EPISODE can be an ID or name."""
     conn = get_db(ctx.obj["db_path"])
-    episode = get_episode(conn, episode_id)
+    episode = resolve_episode(conn, episode)
     if episode is None:
-        click.echo(f"Episode {episode_id} not found.", err=True)
+        click.echo("Episode not found.", err=True)
         sys.exit(1)
 
     prompt = (
@@ -86,6 +89,9 @@ def replay(ctx, episode_id, dry_run, tmux_pane):
         f"## Task: {episode['title']}\n\n"
         f"{episode['summary']}\n"
     )
+
+    if instructions:
+        prompt += f"\n## Additional instructions\n\n{instructions}\n"
 
     if tmux_pane is not None:
         prompt += (
@@ -100,6 +106,21 @@ def replay(ctx, episode_id, dry_run, tmux_pane):
         return
 
     subprocess.run(["claude"], input=prompt, text=True)
+
+
+@cli.command()
+@click.argument("episode")
+@click.argument("name")
+@click.pass_context
+def rename(ctx, episode, name):
+    """Rename an episode. EPISODE can be an ID or current name."""
+    conn = get_db(ctx.obj["db_path"])
+    ep = resolve_episode(conn, episode)
+    if ep is None:
+        click.echo("Episode not found.", err=True)
+        sys.exit(1)
+    rename_episode(conn, ep["id"], name)
+    click.echo(f"Episode {ep['id']} renamed to '{name}'")
 
 
 @cli.command()
