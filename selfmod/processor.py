@@ -2,6 +2,7 @@ import json
 import subprocess
 import sys
 import time
+from datetime import datetime
 
 from selfmod.db import (
     get_unprocessed_frames,
@@ -20,12 +21,13 @@ Include: commands run, files touched, purpose, environment context, and outcome.
 
 Respond with ONLY valid JSON (no markdown fences, no commentary) in this exact format:
 {{"frames": [{{"id": <frame_id>, "summary": "..."}}, ...],
- "new_episodes": [{{"title": "...", "summary": "...", "frame_ids": [<id>, ...]}}, ...],
+ "new_episodes": [{{"name": "words-joined-by-hyphens", "title": "...", "summary": "...", "frame_ids": [<id>, ...]}}, ...],
  "existing_episode_assignments": [{{"frame_id": <id>, "episode_id": <id>}}, ...]}}
 
 Rules:
 - Every frame must appear in exactly one of: new_episodes.frame_ids or existing_episode_assignments
 - new_episodes is for frames that start a new task not covered by existing episodes
+- Each new episode must have a "name" field: a short multi-word identifier with words joined by hyphens (e.g. "check-disk-space", "deploy-api-server")
 - existing_episode_assignments is for frames that continue an existing episode
 {existing_episodes_section}
 Frames:
@@ -71,6 +73,19 @@ def _call_claude(prompt):
     return json.loads(text.strip())
 
 
+def _unique_name(conn, name, timestamp):
+    """If name already exists, append -YYYYMMDD or -YYYYMMDD-HHMM."""
+    exists = conn.execute("SELECT 1 FROM episodes WHERE name = ?", (name,)).fetchone()
+    if not exists:
+        return name
+    dt = datetime.fromtimestamp(timestamp)
+    candidate = f"{name}-{dt:%Y%m%d}"
+    exists = conn.execute("SELECT 1 FROM episodes WHERE name = ?", (candidate,)).fetchone()
+    if not exists:
+        return candidate
+    return f"{name}-{dt:%Y%m%d-%H%M}"
+
+
 def process_frames(conn, batch_size=20):
     total_processed = 0
     while True:
@@ -99,8 +114,10 @@ def process_frames(conn, batch_size=20):
             ]
             if not timestamps:
                 continue
+            name = _unique_name(conn, ep_data.get("name", ""), min(timestamps))
             ep_id = insert_episode(
                 conn,
+                name=name,
                 title=ep_data["title"],
                 summary=ep_data["summary"],
                 start_time=min(timestamps),
