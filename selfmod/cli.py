@@ -70,8 +70,9 @@ def search(ctx, query):
 @cli.command()
 @click.argument("episode_id", type=int)
 @click.option("--dry-run", is_flag=True, help="Print the prompt instead of launching Claude")
+@click.option("--tmux-pane", default=None, help="Tmux pane index in current window to control via tmux send-keys")
 @click.pass_context
-def replay(ctx, episode_id, dry_run):
+def replay(ctx, episode_id, dry_run, tmux_pane):
     """Replay an episode using Claude Code."""
     conn = get_db(ctx.obj["db_path"])
     episode = get_episode(conn, episode_id)
@@ -85,6 +86,14 @@ def replay(ctx, episode_id, dry_run):
         f"## Task: {episode['title']}\n\n"
         f"{episode['summary']}\n"
     )
+
+    if tmux_pane is not None:
+        prompt += (
+            f"\n## Execution method\n\n"
+            f"Execute commands in tmux pane {tmux_pane} of the current window. "
+            f"Use `tmux send-keys -t {tmux_pane} '...' Enter` to run each command. "
+            f"Use `tmux capture-pane -t {tmux_pane} -p` to read the pane output and verify results.\n"
+        )
 
     if dry_run:
         click.echo(prompt)
