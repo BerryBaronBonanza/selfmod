@@ -50,7 +50,18 @@ selfmod process
 selfmod process --batch-size 10
 ```
 
-Creates episodes with hyphenated names (e.g. `check-disk-ppr31`), titles, and detailed summaries. Summaries are written to be self-contained enough for Claude Code to replay the task.
+Creates episodes with hyphenated names (e.g. `check-disk-ppr31`), titles, and detailed summaries. After all batches, episode summaries are consolidated from all frames to ensure full coverage. Summaries are written to be self-contained enough for Claude Code to replay the task.
+
+### Consolidate
+
+Re-summarize an existing episode using all its frames:
+
+```
+selfmod consolidate check-disk-ppr31
+selfmod consolidate 3
+```
+
+Useful when an episode summary is stale or was generated from incomplete data.
 
 ### Search
 

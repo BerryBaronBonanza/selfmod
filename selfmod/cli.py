@@ -15,7 +15,7 @@ from selfmod.db import (
     resolve_episode,
     search_episodes,
 )
-from selfmod.processor import process_frames
+from selfmod.processor import process_frames, _consolidate_episode
 from selfmod.recorder import FrameRecorder
 
 
@@ -49,6 +49,22 @@ def process(ctx, batch_size):
     """Analyze unprocessed frames with Claude Code and group into episodes."""
     conn = get_db(ctx.obj["db_path"])
     process_frames(conn, batch_size=batch_size)
+
+
+@cli.command()
+@click.argument("episode")
+@click.pass_context
+def consolidate(ctx, episode):
+    """Re-summarize an episode using all its frames. EPISODE can be an ID or name."""
+    conn = get_db(ctx.obj["db_path"])
+    ep = resolve_episode(conn, episode)
+    if ep is None:
+        click.echo("Episode not found.", err=True)
+        sys.exit(1)
+    click.echo(f"Consolidating episode {ep['id']}: {ep['title']}...")
+    _consolidate_episode(conn, ep["id"])
+    conn.commit()
+    click.echo("Done.")
 
 
 @cli.command()

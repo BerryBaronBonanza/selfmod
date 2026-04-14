@@ -5,6 +5,8 @@ import time
 from datetime import datetime
 
 from selfmod.db import (
+    get_episode,
+    get_episode_frames,
     get_unprocessed_frames,
     get_recent_episodes,
     insert_episode,
@@ -73,6 +75,21 @@ def _call_claude(prompt):
     return json.loads(text.strip())
 
 
+CONSOLIDATE_PROMPT_TEMPLATE = """\
+Rewrite the summary for this episode based on ALL its frames.
+The summary must be detailed enough that Claude Code could execute the same task
+in the future using ONLY the summary — no frames will be provided at replay time.
+Include: commands run, files touched, purpose, environment context, and outcome.
+
+Episode title: {title}
+Current summary: {old_summary}
+
+All frame summaries (chronological):
+{frame_summaries}
+
+Respond with ONLY the new summary text (no JSON, no markdown fences, no commentary)."""
+
+
 def _unique_name(conn, name, timestamp):
     """If name already exists, append -YYYYMMDD or -YYYYMMDD-HHMM."""
     exists = conn.execute("SELECT 1 FROM episodes WHERE name = ?", (name,)).fetchone()
@@ -86,8 +103,45 @@ def _unique_name(conn, name, timestamp):
     return f"{name}-{dt:%Y%m%d-%H%M}"
 
 
+def _consolidate_episode(conn, episode_id):
+    """Re-summarize an episode using all its frame summaries."""
+    ep = get_episode(conn, episode_id)
+    frames = get_episode_frames(conn, episode_id)
+    if not frames:
+        return
+
+    frame_lines = []
+    for f in frames:
+        summary = f["summary"] or "(no summary)"
+        frame_lines.append(f"  [{f['id']}] {f['frame_type']}: {summary}")
+
+    prompt = CONSOLIDATE_PROMPT_TEMPLATE.format(
+        title=ep["title"],
+        old_summary=ep["summary"],
+        frame_summaries="\n".join(frame_lines),
+    )
+
+    result = subprocess.run(
+        ["claude", "-p", "--output-format", "json"],
+        input=prompt,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        sys.stderr.write(f"  Warning: consolidation failed for episode {episode_id}: {result.stderr}\n")
+        return
+
+    response = json.loads(result.stdout)
+    new_summary = response.get("result", "").strip()
+    if new_summary:
+        update_episode(conn, episode_id, summary=new_summary)
+    else:
+        sys.stderr.write(f"  Warning: consolidation returned empty summary for episode {episode_id}\n")
+
+
 def process_frames(conn, batch_size=20):
     total_processed = 0
+    episodes_to_consolidate = set()
     while True:
         frames = get_unprocessed_frames(conn, limit=batch_size)
         if not frames:
@@ -125,12 +179,14 @@ def process_frames(conn, batch_size=20):
             )
             for fid in frame_ids:
                 frame_to_episode[fid] = ep_id
+            episodes_to_consolidate.add(ep_id)
 
         # Existing episode assignments
         for assignment in result.get("existing_episode_assignments", []):
             fid = assignment["frame_id"]
             ep_id = assignment["episode_id"]
             frame_to_episode[fid] = ep_id
+            episodes_to_consolidate.add(ep_id)
             # Extend episode end_time
             frame_ts = next(
                 (f["timestamp"] for f in frames if f["id"] == fid), None
@@ -150,5 +206,15 @@ def process_frames(conn, batch_size=20):
 
     if total_processed == 0:
         sys.stderr.write("No unprocessed frames found.\n")
-    else:
-        sys.stderr.write(f"Finished processing {total_processed} frames.\n")
+        return
+
+    # Consolidate summaries for all episodes that received frames
+    if episodes_to_consolidate:
+        sys.stderr.write(f"Consolidating summaries for {len(episodes_to_consolidate)} episode(s)...\n")
+        for ep_id in episodes_to_consolidate:
+            ep = get_episode(conn, ep_id)
+            sys.stderr.write(f"  Episode {ep_id}: {ep['title']}...\n")
+            _consolidate_episode(conn, ep_id)
+        conn.commit()
+
+    sys.stderr.write(f"Finished processing {total_processed} frames.\n")
